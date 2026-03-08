@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+  <meta name="theme-color" content="#0c0d11"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="CommandCenter"/>
+  <meta name="description" content="Harsh's Daily Command Center — reminders, goals, meals, water, workout & sleep"/>
+  <title>Daily Command Center</title>
+  <link rel="manifest" href="/manifest.json"/>
+  <link rel="icon" href="/icon-192.png"/>
+  <link rel="apple-touch-icon" href="/icon-192.png"/>
+  <!-- React + Babel -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    html,body,#root{height:100%;margin:0;padding:0;background:#0c0d11;}
+    *{-webkit-tap-highlight-color:transparent;}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+// ── Storage shim (localStorage for PWA) ──────────────────────────────────
+window.storage = {
+  get: async (key) => {
+    try { const v = localStorage.getItem(key); return v !== null ? { key, value: v } : null; } catch(e) { return null; }
+  },
+  set: async (key, value) => {
+    try { localStorage.setItem(key, value); return { key, value }; } catch(e) { return null; }
+  },
+  delete: async (key) => {
+    try { localStorage.removeItem(key); return { key, deleted: true }; } catch(e) { return null; }
+  },
+  list: async (prefix) => {
+    try {
+      const keys = Object.keys(localStorage).filter(k => !prefix || k.startsWith(prefix));
+      return { keys };
+    } catch(e) { return { keys: [] }; }
+  }
+};
+
+// ── Service Worker registration ───────────────────────────────────────────
+let swReg = null;
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').then(reg => {
+    swReg = reg;
+    console.log('SW registered:', reg.scope);
+    // Kick off water interval in SW
+    if (reg.active) reg.active.postMessage({ type: 'WATER_INTERVAL' });
+    reg.addEventListener('updatefound', () => {
+      reg.installing?.addEventListener('statechange', e => {
+        if (e.target.state === 'activated') reg.active.postMessage({ type: 'WATER_INTERVAL' });
+      });
+    });
+  }).catch(e => console.warn('SW reg failed:', e));
+}
+
+// Schedule a notification via SW (fires even with tab minimized on Android)
+function scheduleNotif(id, delayMs, title, body) {
+  if (swReg?.active) {
+    swReg.active.postMessage({ type: 'SCHEDULE', id, delay: delayMs, title, body, tag: `hk-${id}` });
+  }
+}
+window.scheduleNotif = scheduleNotif;
+</script>
+
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+/* ── Styles ─────────────────────────────────────────────────────────────── */
+const Styles = () => (
+  <style>{`
+    @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&family=JetBrains+Mono:wght@400;500&display=swap');
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+    :root{
+      --bg:#0c0d11;--s1:#131520;--s2:#191c2a;--s3:#1e2135;
+      --b1:#222540;--b2:#2c3058;
+      --tx:#eceaf6;--m1:#5c6080;--m2:#8a8fb5;--m3:#b4b8d4;
+      --gold:#e9b96a;--gold2:#f5d08a;--gold3:#7a5a20;
+      --blue:#5b8cf5;--green:#42c98d;--pink:#d96b95;--teal:#35c4c0;--purple:#9b7fe8;
+      --fd:'DM Serif Display',Georgia,serif;
+      --fb:'DM Sans',system-ui,sans-serif;
+      --fm:'JetBrains Mono',monospace;
+      --bot-h:68px;
+      --safe-b: env(safe-area-inset-bottom, 0px);
+    }
+    html,body{background:var(--bg);color:var(--tx);font-family:var(--fb);height:100%;overflow:hidden;}
+    #root{height:100%;display:flex;flex-direction:column;}
+    input,textarea,select{
+      background:var(--s3)!important;border:1px solid var(--b2)!important;
+      border-radius:8px!important;padding:9px 13px!important;color:var(--tx)!important;
+      font-family:var(--fb)!important;font-size:13px!important;outline:none!important;
+      width:100%;transition:border-color .2s;
+    }
+    input:focus,textarea:focus,select:focus{border-color:var(--gold)!important;box-shadow:0 0 0 3px rgba(233,185,106,.08)!important;}
+    input[type=range]{padding:2px 0!important;border:none!important;background:transparent!important;accent-color:var(--gold);}
+    input[type=time]{color-scheme:dark;}
+    option{background:var(--s2);}
+    ::-webkit-scrollbar{width:3px;height:3px;}
+    ::-webkit-scrollbar-track{background:transparent;}
+    ::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px;}
+    @keyframes fu{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes toastIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:translateX(0)}}
+    .fu{animation:fu .3s ease both}
+    .fu1{animation:fu .3s .05s ease both}
+    .fu2{animation:fu .3s .10s ease both}
+    .fu3{animation:fu .3s .15s ease both}
+    .fu4{animation:fu .3s .20s ease both}
+    .fu5{animation:fu .3s .25s ease both}
+    .card{background:var(--s1);border:1px solid var(--b1);border-radius:14px;padding:15px 16px;margin-bottom:10px;transition:border-color .2s,box-shadow .2s;}
+    .pill{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:999px;font-size:11px;font-family:var(--fm);border:1px solid currentColor;letter-spacing:.3px;}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:9px 18px;border-radius:9px;border:none;font-family:var(--fb);font-size:13px;font-weight:500;cursor:pointer;transition:all .18s;}
+    .btn-gold{background:var(--gold);color:#0d0a02;}
+    .btn-gold:hover{background:var(--gold2);}
+    .btn-ghost{background:var(--s2);color:var(--m2);border:1px solid var(--b1);}
+    .btn-ghost:hover{border-color:var(--gold);color:var(--gold);}
+    .btn-green{background:var(--green);color:#051a10;}
+    /* Sidebar */
+    .snav{display:flex;align-items:center;gap:7px;padding:9px 12px;border-radius:10px;border:none;font-family:var(--fb);font-size:13px;font-weight:500;cursor:pointer;transition:all .18s;text-align:left;width:100%;white-space:nowrap;}
+    .snav.on{background:var(--s2);color:var(--gold);}
+    .snav:not(.on){background:transparent;color:var(--m1);}
+    .snav:not(.on):hover{background:var(--s2);color:var(--m3);}
+    /* Bottom Nav */
+    .bnav-bar{
+      display:none;position:fixed;bottom:0;left:0;right:0;
+      height:calc(var(--bot-h) + var(--safe-b));
+      padding-bottom:var(--safe-b);
+      background:var(--s1);border-top:1px solid var(--b1);
+      z-index:200;align-items:stretch;overflow-x:auto;
+      -webkit-overflow-scrolling:touch;
+    }
+    .bnav-bar::-webkit-scrollbar{display:none;}
+    .bnav-btn{
+      display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+      flex:0 0 auto;min-width:62px;padding:0 4px;
+      background:transparent;border:none;cursor:pointer;
+      font-family:var(--fb);font-size:10px;letter-spacing:.2px;transition:color .18s;position:relative;
+    }
+    .bnav-btn .bi{font-size:20px;line-height:1;transition:transform .18s;}
+    .bnav-btn.on{color:var(--gold);}
+    .bnav-btn:not(.on){color:var(--m1);}
+    .bnav-btn.on .bi{transform:translateY(-2px);}
+    .bnav-btn.on::after{content:'';position:absolute;bottom:4px;left:50%;transform:translateX(-50%);width:4px;height:4px;border-radius:50%;background:var(--gold);}
+    /* Toggle */
+    .tog{width:42px;height:23px;border-radius:12px;border:none;cursor:pointer;position:relative;transition:background .2s;flex-shrink:0;}
+    .tog-k{width:17px;height:17px;border-radius:50%;background:#fff;position:absolute;top:3px;transition:left .2s;box-shadow:0 1px 4px rgba(0,0,0,.4);}
+    .prog{background:var(--s3);border-radius:999px;overflow:hidden;}
+    .prog-f{height:100%;border-radius:999px;transition:width .5s ease;}
+    .set-chip{padding:5px 12px;border-radius:7px;font-size:12px;font-family:var(--fm);cursor:pointer;transition:all .18s;border:1px solid var(--b2);background:var(--s3);color:var(--m2);}
+    .set-chip.on{background:#061f10;border-color:var(--green);color:var(--green);}
+    .check{width:22px;height:22px;border-radius:6px;flex-shrink:0;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .18s;border:none;font-size:12px;font-weight:700;}
+    .q-em{font-size:22px;cursor:pointer;transition:transform .15s;background:none;border:none;}
+    .q-em:hover{transform:scale(1.2);}
+    .sound-btn{display:inline-flex;align-items:center;gap:6px;padding:8px 10px;border-radius:9px;font-size:11px;font-family:var(--fb);cursor:pointer;transition:all .15s;border:1px solid currentColor;width:100%;justify-content:flex-start;}
+    .sound-btn:hover{filter:brightness(1.15);}
+    @media(max-width:700px){
+      .sidebar{display:none!important;}
+      .bnav-bar{display:flex!important;}
+      .main-pad{padding:18px 14px calc(var(--bot-h) + var(--safe-b) + 16px) 14px!important;}
+    }
+    @media(min-width:701px){
+      .bnav-bar{display:none!important;}
+      .sidebar{display:flex!important;}
+    }
+  `}</style>
+);
+
+/* ── Web Audio ───────────────────────────────────────────────────────────── */
+const actx = { c: null };
+function gctx(){ if(!actx.c) actx.c=new(window.AudioContext||window.webkitAudioContext)(); return actx.c; }
+const SND = {
+  shake:(ctx)=>{ const t=ctx.currentTime,o=ctx.createOscillator(),g=ctx.createGain(); o.connect(g);g.connect(ctx.destination); o.type="sine";o.frequency.setValueAtTime(523,t);o.frequency.exponentialRampToValueAtTime(392,t+.4); g.gain.setValueAtTime(.35,t);g.gain.exponentialRampToValueAtTime(.001,t+.6); o.start(t);o.stop(t+.65); },
+  water:(ctx)=>{ const t=ctx.currentTime; [0,.12].forEach(d=>{ const o=ctx.createOscillator(),g=ctx.createGain(); o.connect(g);g.connect(ctx.destination); o.type="sine";o.frequency.setValueAtTime(900,t+d);o.frequency.exponentialRampToValueAtTime(400,t+d+.15); g.gain.setValueAtTime(.22,t+d);g.gain.exponentialRampToValueAtTime(.001,t+d+.18); o.start(t+d);o.stop(t+d+.2); }); },
+  workout:(ctx)=>{ const t=ctx.currentTime; [0,.18].forEach(d=>{ const o=ctx.createOscillator(),g=ctx.createGain(); o.connect(g);g.connect(ctx.destination); o.type="square";o.frequency.setValueAtTime(660,t+d); g.gain.setValueAtTime(.15,t+d);g.gain.exponentialRampToValueAtTime(.001,t+d+.12); o.start(t+d);o.stop(t+d+.14); }); },
+  college:(ctx)=>{ const t=ctx.currentTime; [[440,.0],[550,.5]].forEach(([f,s])=>{ const o=ctx.createOscillator(),g=ctx.createGain(),bq=ctx.createBiquadFilter(); bq.type="bandpass";bq.frequency.value=800; o.connect(bq);bq.connect(g);g.connect(ctx.destination); o.type="triangle";o.frequency.setValueAtTime(f,t+s); g.gain.setValueAtTime(.28,t+s);g.gain.exponentialRampToValueAtTime(.001,t+s+.35); o.start(t+s);o.stop(t+s+.4); }); },
+  food:(ctx)=>{ const t=ctx.currentTime; [523,659,784].forEach((f,i)=>{ const o=ctx.createOscillator(),g=ctx.createGain(); o.connect(g);g.connect(ctx.destination); o.type="sine";o.frequency.setValueAtTime(f,t+i*.12); g.gain.setValueAtTime(.2,t+i*.12);g.gain.exponentialRampToValueAtTime(.001,t+i*.12+.4); o.start(t+i*.12);o.stop(t+i*.12+.45); }); },
+  study:(ctx)=>{ const t=ctx.currentTime,o=ctx.createOscillator(),g=ctx.createGain(); o.connect(g);g.connect(ctx.destination); o.type="sine";o.frequency.setValueAtTime(741,t); g.gain.setValueAtTime(.25,t);g.gain.exponentialRampToValueAtTime(.001,t+.7); o.start(t);o.stop(t+.75); },
+  sleep:(ctx)=>{ const t=ctx.currentTime; [392,349,330,294].forEach((f,i)=>{ const o=ctx.createOscillator(),g=ctx.createGain(); o.connect(g);g.connect(ctx.destination); o.type="sine";o.frequency.setValueAtTime(f,t+i*.22); g.gain.setValueAtTime(.18,t+i*.22);g.gain.exponentialRampToValueAtTime(.001,t+i*.22+.35); o.start(t+i*.22);o.stop(t+i*.22+.38); }); },
+};
+function playSound(cat){ try{ const c=gctx(); if(c.state==="suspended")c.resume(); (SND[cat]||SND.study)(c); }catch(e){} }
+
+/* ── Constants ───────────────────────────────────────────────────────────── */
+const SUBJECTS=["DSA","DBMS","OOPS","OS","JavaScript"];
+const DAYS=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+const CAT={
+  shake:{c:"#e9b96a",i:"🍌",label:"Shake",    desc:"Warm bell"},
+  water:{c:"#35c4c0",i:"💧",label:"Water",    desc:"Drop chirp"},
+  workout:{c:"#5b8cf5",i:"💪",label:"Workout",desc:"Power beep"},
+  college:{c:"#9b7fe8",i:"🎓",label:"College",desc:"School bell"},
+  food:{c:"#42c98d",i:"🍽️",label:"Food",     desc:"Chime arp"},
+  study:{c:"#60a5fa",i:"📖",label:"Study",   desc:"Focus ping"},
+  sleep:{c:"#d96b95",i:"😴",label:"Sleep",   desc:"Lullaby"},
+};
+const SC={DSA:"#e9b96a",DBMS:"#42c98d",OOPS:"#5b8cf5",OS:"#d96b95",JavaScript:"#35c4c0"};
+const MEAL_OPT=["Banana Shake","Roti","Rice","Dal","Eggs","Paneer","Chicken","Sabzi","Salad","Milk","Bread","Fruits","Biscuits","Curd","Peanut Butter Toast","Oats"];
+const DEFAULT_REM=[
+  {id:1,time:"08:15",label:"Morning Shake",   msg:"Banana Shake #1 — 1021 kcal. Fuel up!",       cat:"shake",  on:true},
+  {id:2,time:"09:00",label:"Workout",          msg:"40–45 min home workout. Start strong!",       cat:"workout",on:true},
+  {id:3,time:"10:30",label:"Leave for College",msg:"Time to leave — 28 km commute ahead.",        cat:"college",on:true},
+  {id:4,time:"13:30",label:"Lunch Break",      msg:"Have a proper lunch. Don't skip!",            cat:"food",   on:true},
+  {id:5,time:"19:45",label:"Evening Shake",    msg:"Banana Shake #2 — 1021 kcal. Post-commute!", cat:"shake",  on:true},
+  {id:6,time:"20:00",label:"Study Session I",  msg:"Focus block begins. Phone away!",             cat:"study",  on:true},
+  {id:7,time:"22:30",label:"Dinner",           msg:"Dinner time. Roti + dal + protein.",          cat:"food",   on:true},
+  {id:8,time:"23:00",label:"Study Session II", msg:"Final session. Finish strong!",               cat:"study",  on:true},
+  {id:9,time:"01:30",label:"Wind Down",        msg:"Start wrapping up. Sleep target: 2 AM.",      cat:"sleep",  on:true},
+  {id:10,time:"02:00",label:"Sleep",           msg:"Rest now — muscles grow while you sleep.",    cat:"sleep",  on:true},
+];
+const DEFAULT_TT={Mon:["DSA","DBMS"],Tue:["OOPS","OS"],Wed:["JavaScript","DSA"],Thu:["DBMS","OOPS"],Fri:["OS","JavaScript"],Sat:["DSA","DBMS"],Sun:[]};
+const WP={
+  Mon:{f:"Push — Chest & Arms",  e:[{n:"Warm-up",s:1,r:"5 min"},{n:"Push-ups",s:3,r:"15 reps"},{n:"Wide Push-ups",s:3,r:"12 reps"},{n:"Chair Dips",s:3,r:"12 reps"},{n:"Pike Push-ups",s:3,r:"10 reps"},{n:"Plank",s:3,r:"30 sec"}]},
+  Tue:{f:"Pull — Back & Biceps", e:[{n:"Warm-up",s:1,r:"5 min"},{n:"Superman Hold",s:3,r:"15 reps"},{n:"Reverse Snow Angels",s:3,r:"15 reps"},{n:"Towel Rows",s:3,r:"12 reps"},{n:"Bicycle Crunches",s:3,r:"20 reps"}]},
+  Wed:{f:"Legs & Core",          e:[{n:"Warm-up",s:1,r:"5 min"},{n:"Squats",s:4,r:"20 reps"},{n:"Lunges",s:3,r:"12 each"},{n:"Glute Bridges",s:3,r:"15 reps"},{n:"Calf Raises",s:3,r:"20 reps"},{n:"Side Plank",s:3,r:"30 sec each"}]},
+  Thu:{f:"Active Recovery",      e:[{n:"Stretching / Yoga",s:1,r:"15 min"},{n:"Slow Walk",s:1,r:"15 min"},{n:"Deep Breathing",s:1,r:"5 min"}]},
+  Fri:{f:"Full Body Strength",   e:[{n:"Warm-up",s:1,r:"5 min"},{n:"Push-ups",s:3,r:"15 reps"},{n:"Squats",s:3,r:"20 reps"},{n:"Lunges",s:3,r:"12 each"},{n:"Chair Dips",s:3,r:"12 reps"},{n:"Plank",s:3,r:"45 sec"}]},
+  Sat:{f:"Shoulders & Core",     e:[{n:"Warm-up",s:1,r:"5 min"},{n:"Pike Push-ups",s:4,r:"12 reps"},{n:"Arm Circles",s:3,r:"30 sec"},{n:"Side Plank",s:3,r:"30 sec each"},{n:"Leg Raises",s:3,r:"15 reps"},{n:"Russian Twists",s:3,r:"20 reps"}]},
+  Sun:{f:"Rest Day 🌴",          e:[{n:"Complete Rest",s:0,r:"—"},{n:"Light Walk (optional)",s:1,r:"20 min"}]},
+};
+
+const t2m=t=>{const[h,m]=t.split(":").map(Number);return h*60+m;};
+const nowM=()=>{const n=new Date();return n.getHours()*60+n.getMinutes();};
+const fmtD=d=>{if(d<=0)return"Now";const h=Math.floor(d/60),m=d%60;return h>0?`${h}h ${m}m`:`${m}m`;};
+const todayKey=()=>new Date().toDateString();
+const todayDay=()=>DAYS[new Date().getDay()===0?6:new Date().getDay()-1];
+const sv=async(k,v)=>{try{await window.storage.set(k,typeof v==="string"?v:JSON.stringify(v));}catch(e){}};
+
+function SH({title,sub}){return(<div style={{marginBottom:20}}><h2 style={{fontFamily:"var(--fd)",fontSize:21,fontWeight:400,color:"var(--tx)",marginBottom:4,letterSpacing:"-.3px"}}>{title}</h2>{sub&&<p style={{fontSize:12,color:"var(--m2)",lineHeight:1.5}}>{sub}</p>}</div>);}
+function Tog({on,toggle,color="#e9b96a"}){return(<button className="tog" onClick={toggle} style={{background:on?color:"var(--b1)"}}><div className="tog-k" style={{left:on?"22px":"3px"}}/></button>);}
+
+const TABS=[
+  {k:"reminders",i:"⏰",l:"Reminders"},
+  {k:"timetable",i:"📅",l:"Timetable"},
+  {k:"goals",    i:"🎯",l:"Goals"},
+  {k:"meals",    i:"🍽️",l:"Meals"},
+  {k:"water",    i:"💧",l:"Water"},
+  {k:"workout",  i:"🏋️",l:"Workout"},
+  {k:"sleep",    i:"💤",l:"Sleep"},
+  {k:"notes",    i:"📝",l:"Notes"},
+];
+
+function App(){
+  const [tab,setTab]=useState("reminders");
+  const [rems,setRems]=useState(DEFAULT_REM);
+  const [tt,setTt]=useState(DEFAULT_TT);
+  const [goals,setGoals]=useState(SUBJECTS.map((s,i)=>({id:i+1,s,topic:"",target:"",done:false})));
+  const [streak,setStreak]=useState({n:0,last:""});
+  const [meals,setMeals]=useState([]);
+  const [mi,setMi]=useState({name:"",kcal:"",time:""});
+  const [notes,setNotes]=useState("");
+  const [water,setWater]=useState(0);
+  const [wo,setWo]=useState({});
+  const [sleep,setSleep]=useState({bed:"",wake:"",q:3,note:""});
+  const [slog,setSlog]=useState([]);
+  const [toast,setToast]=useState(null);
+  const [notif,setNotif]=useState(false);
+  const [soundOn,setSoundOn]=useState(true);
+  const [eg,setEg]=useState(null);
+  const [ttd,setTtd]=useState(null);
+  const firedR=useRef(new Set());
+  const wRef=useRef(null);
+  const [,tick]=useState(0);
+
+  useEffect(()=>{const iv=setInterval(()=>tick(x=>x+1),30000);return()=>clearInterval(iv);},[]);
+
+  useEffect(()=>{
+    (async()=>{
+      const ld=async(k,fn,raw)=>{try{const r=await window.storage.get(k);if(r)fn(raw?r.value:JSON.parse(r.value));}catch(e){}};
+      ld("hkr",setRems);ld("hktt",setTt);ld(`hkg-${todayKey()}`,setGoals);ld("hkst",setStreak);
+      ld(`hkm-${todayKey()}`,setMeals);ld("hkn",v=>setNotes(v),true);
+      ld(`hkw-${todayKey()}`,v=>setWater(Number(v)),true);ld(`hkwo-${todayKey()}`,setWo);ld("hksl",setSlog);
+      ld("hksnd",v=>setSoundOn(v==="true"),true);
+    })();
+  },[]);
+
+  useEffect(()=>{sv("hkr",rems);},[rems]);
+  useEffect(()=>{sv("hktt",tt);},[tt]);
+  useEffect(()=>{sv(`hkg-${todayKey()}`,goals);},[goals]);
+  useEffect(()=>{sv(`hkm-${todayKey()}`,meals);},[meals]);
+  useEffect(()=>{sv("hkn",notes);},[notes]);
+  useEffect(()=>{sv(`hkw-${todayKey()}`,String(water));},[water]);
+  useEffect(()=>{sv(`hkwo-${todayKey()}`,wo);},[wo]);
+  useEffect(()=>{sv("hksl",slog);},[slog]);
+  useEffect(()=>{sv("hksnd",String(soundOn));},[soundOn]);
+
+  useEffect(()=>{
+    if(goals.every(g=>g.done)&&streak.last!==todayKey()){
+      const y=new Date();y.setDate(y.getDate()-1);
+      const ns={n:streak.last===y.toDateString()?streak.n+1:1,last:todayKey()};
+      setStreak(ns);sv("hkst",ns);
+    }
+  },[goals]);
+
+  // Schedule all enabled reminders via SW
+  useEffect(()=>{
+    if(!notif) return;
+    const cm=nowM();
+    rems.filter(r=>r.on).forEach(r=>{
+      let d=t2m(r.time)-cm; if(d<0)d+=1440;
+      window.scheduleNotif(r.id, d*60*1000, r.label, r.msg);
+    });
+  },[notif,rems]);
+
+  useEffect(()=>{
+    const cm=nowM();
+    rems.forEach(r=>{
+      if(!r.on)return;
+      const key=`${r.id}-${todayKey()}`;
+      if(Math.abs(t2m(r.time)-cm)<=1&&!firedR.current.has(key)){
+        firedR.current.add(key);fire(r.label,r.msg,r.cat);
+      }
+    });
+  });
+
+  useEffect(()=>{
+    if(wRef.current)clearInterval(wRef.current);
+    wRef.current=setInterval(()=>fire("Drink Water 💧","Time for a glass of water!","water"),12*60*1000);
+    return()=>clearInterval(wRef.current);
+  },[notif]);
+
+  function fire(label,msg,cat){
+    setToast({label,msg,cat});
+    setTimeout(()=>setToast(null),5000);
+    if(soundOn)playSound(cat);
+    if(notif&&"Notification"in window&&Notification.permission==="granted")
+      new Notification(label,{body:msg,icon:"/icon-192.png",vibrate:[200,100,200]});
+  }
+
+  async function enableNotif(){
+    if(!("Notification"in window)){fire("Not Supported","Use Chrome on Android for notifications.","sleep");return;}
+    const p=await Notification.requestPermission();
+    setNotif(p==="granted");
+    if(p==="granted"){
+      // Kick off SW water interval
+      navigator.serviceWorker.ready.then(reg=>{
+        if(reg.active) reg.active.postMessage({type:"WATER_INTERVAL"});
+      });
+      fire("Notifications Active 🔔","Background alerts enabled! Works even with screen off.","workout");
+    } else {
+      fire("Permission Denied","Go to Chrome Settings → Site Settings → Allow Notifications.","sleep");
+    }
+  }
+
+  const cm=nowM();
+  const srem=[...rems].sort((a,b)=>{let da=t2m(a.time)-cm,db=t2m(b.time)-cm;if(da<0)da+=1440;if(db<0)db+=1440;return da-db;});
+  const nxt=srem.find(r=>r.on);
+  const nxtD=nxt?(()=>{let d=t2m(nxt.time)-cm;if(d<0)d+=1440;return d;})():null;
+  const totKcal=meals.reduce((s,m)=>s+(Number(m.kcal)||0),0);
+  const todW=WP[todayDay()];
+  const todWD=wo[todayDay()]||{};
+  const gDone=goals.filter(g=>g.done).length;
+
+  const NavItems=({mode})=>TABS.map(t=>{
+    if(mode==="bottom") return(
+      <button key={t.k} className={`bnav-btn${tab===t.k?" on":""}`} onClick={()=>setTab(t.k)}>
+        <span className="bi">{t.i}</span><span>{t.l}</span>
+      </button>
+    );
+    return(
+      <button key={t.k} className={`snav${tab===t.k?" on":""}`} onClick={()=>setTab(t.k)}>
+        <span style={{fontSize:14}}>{t.i}</span><span>{t.l}</span>
+        {t.k==="goals"&&gDone>0&&<span style={{marginLeft:"auto",fontSize:10,fontFamily:"var(--fm)",color:"var(--green)"}}>{gDone}</span>}
+      </button>
+    );
+  });
+
+  return(
+    <>
+      <Styles/>
+      <div style={{fontFamily:"var(--fb)",background:"var(--bg)",height:"100%",color:"var(--tx)",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+
+        {toast&&(
+          <div style={{position:"fixed",top:16,right:16,zIndex:9999,background:CAT[toast.cat]?.c||"var(--gold)",color:"#0c0a02",padding:"12px 16px",borderRadius:"12px",maxWidth:"270px",boxShadow:"0 10px 36px rgba(0,0,0,.55)",animation:"toastIn .25s ease",display:"flex",alignItems:"flex-start",gap:9}}>
+            <span style={{fontSize:19,lineHeight:1,flexShrink:0}}>{CAT[toast.cat]?.i||"🔔"}</span>
+            <div><div style={{fontWeight:600,fontSize:13,marginBottom:2}}>{toast.label}</div><div style={{fontSize:12,opacity:.75}}>{toast.msg}</div></div>
+          </div>
+        )}
+
+        {/* Top Bar */}
+        <header style={{background:"var(--s1)",borderBottom:"1px solid var(--b1)",padding:"0 14px",display:"flex",alignItems:"center",justifyContent:"space-between",height:52,flexShrink:0,position:"sticky",top:0,zIndex:100}}>
+          <div style={{display:"flex",alignItems:"center",gap:9}}>
+            <div style={{width:28,height:28,borderRadius:7,background:"linear-gradient(135deg,var(--gold),#b8821a)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"var(--fd)",fontSize:14,color:"#0c0a02"}}>H</div>
+            <div>
+              <div style={{fontFamily:"var(--fd)",fontSize:13,color:"var(--tx)",lineHeight:1.1}}>Harsh Kapase</div>
+              <div style={{fontSize:9,color:"var(--m1)",fontFamily:"var(--fm)",letterSpacing:".4px"}}>DAILY COMMAND CENTER</div>
+            </div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div style={{display:"flex",gap:10,alignItems:"center"}}>
+              {[["🔥",`${streak.n}d`],["💧",`${water}/9`],["🎯",`${gDone}/${goals.length}`]].map(([ic,v])=>(
+                <span key={v} style={{fontSize:11,color:"var(--m2)",display:"flex",alignItems:"center",gap:2,fontFamily:"var(--fm)"}}>{ic}<span style={{color:"var(--m3)"}}>{v}</span></span>
+              ))}
+            </div>
+            <button onClick={()=>{setSoundOn(s=>!s);try{playSound(soundOn?"sleep":"water");}catch(e){}}} style={{background:"transparent",border:`1px solid ${soundOn?"var(--gold)":"var(--b2)"}`,borderRadius:7,padding:"4px 9px",color:soundOn?"var(--gold)":"var(--m1)",fontSize:13,cursor:"pointer",transition:"all .2s"}}>{soundOn?"🔊":"🔇"}</button>
+            <button onClick={enableNotif} style={{background:"transparent",border:`1px solid ${notif?"var(--green)":"var(--b2)"}`,borderRadius:7,padding:"4px 9px",color:notif?"var(--green)":"var(--m1)",fontSize:11,cursor:"pointer",fontFamily:"var(--fb)",transition:"all .2s"}}>{notif?"🔔":"🔕"}</button>
+          </div>
+        </header>
+
+        <div style={{display:"flex",flex:1,minHeight:0,overflow:"hidden"}}>
+          {/* Desktop Sidebar */}
+          <nav className="sidebar" style={{width:170,background:"var(--s1)",borderRight:"1px solid var(--b1)",padding:"12px 8px",flexDirection:"column",gap:2,flexShrink:0,overflowY:"auto"}}>
+            {nxt&&(
+              <div style={{background:"var(--s2)",border:"1px solid var(--b1)",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+                <div style={{fontSize:10,color:"var(--m1)",letterSpacing:".5px",textTransform:"uppercase",marginBottom:4,fontFamily:"var(--fm)"}}>Next up</div>
+                <div style={{fontSize:12,color:"var(--m3)",fontWeight:500,marginBottom:3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nxt.label}</div>
+                <div style={{fontFamily:"var(--fm)",fontSize:20,color:"var(--gold)",fontWeight:500,lineHeight:1}}>{fmtD(nxtD)}</div>
+                <div style={{fontSize:10,color:"var(--m1)",fontFamily:"var(--fm)",marginTop:3}}>{nxt.time}</div>
+              </div>
+            )}
+            <NavItems mode="sidebar"/>
+          </nav>
+
+          {/* Main */}
+          <main className="main-pad" style={{flex:1,overflowY:"auto",padding:"20px 18px 50px",minWidth:0}}>
+            <div style={{maxWidth:640}}>
+
+              {/* REMINDERS */}
+              {tab==="reminders"&&(
+                <div>
+                  <SH title="Reminders" sub="Each category has a unique sound. Tap the icon to preview."/>
+                  <div className="card fu" style={{borderColor:"var(--gold)28",marginBottom:16}}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:11}}>
+                      <div style={{fontSize:13,fontWeight:500,color:"var(--tx)"}}>🎵 Reminder Sounds</div>
+                      <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:"var(--m2)"}}>Sound <Tog on={soundOn} color="var(--gold)" toggle={()=>setSoundOn(s=>!s)}/></div>
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:6}}>
+                      {Object.entries(CAT).map(([k,v])=>(
+                        <button key={k} className="sound-btn" onClick={()=>{if(soundOn)playSound(k);}}
+                          style={{color:v.c,borderColor:v.c+"35",background:v.c+"12",opacity:soundOn?1:.45,cursor:soundOn?"pointer":"default"}}>
+                          <span style={{fontSize:15}}>{v.i}</span>
+                          <div style={{textAlign:"left"}}><div style={{fontSize:11,fontWeight:600}}>{v.label}</div><div style={{fontSize:10,opacity:.7,fontFamily:"var(--fm)"}}>{v.desc}</div></div>
+                          <span style={{marginLeft:"auto",fontSize:11,opacity:.5}}>▶</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Install PWA banner */}
+                  {!notif&&(
+                    <div className="card fu" style={{borderColor:"var(--green)33",background:"linear-gradient(135deg,#061409,#0a1f0e)",marginBottom:16}}>
+                      <div style={{fontSize:13,fontWeight:600,color:"var(--green)",marginBottom:6}}>📲 Enable Background Notifications</div>
+                      <p style={{fontSize:12,color:"var(--m2)",lineHeight:1.7,marginBottom:10}}>
+                        On Android Chrome, tap <strong style={{color:"var(--tx)"}}>🔕 (bell icon)</strong> in the top bar to allow notifications. Then:<br/>
+                        Chrome menu → <strong style={{color:"var(--tx)"}}>Add to Home Screen</strong> → install as app → notifications fire even when screen is off!
+                      </p>
+                      <button className="btn btn-green" style={{width:"100%"}} onClick={enableNotif}>Enable Notifications</button>
+                    </div>
+                  )}
+
+                  {srem.map((r,i)=>{
+                    let d=t2m(r.time)-cm;if(d<0)d+=1440;
+                    const c=CAT[r.cat];
+                    return(
+                      <div key={r.id} className={`card fu${Math.min(i+1,5)}`} style={{display:"flex",alignItems:"center",gap:10,opacity:d>720?.38:1,border:`1px solid ${r.on?c.c+"28":"var(--b1)"}`}}>
+                        <button onClick={()=>{if(soundOn)playSound(r.cat);}} style={{width:36,height:36,borderRadius:9,background:c.c+"15",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0,border:"none",cursor:"pointer"}}>{c.i}</button>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:13,fontWeight:500,color:"var(--tx)",marginBottom:1}}>{r.label}</div>
+                          <div style={{fontSize:11,color:"var(--m1)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.msg}</div>
+                        </div>
+                        <div style={{textAlign:"right",flexShrink:0,marginRight:6}}>
+                          <div style={{fontFamily:"var(--fm)",fontSize:12,color:r.on?c.c:"var(--m1)"}}>{r.on?fmtD(d):"—"}</div>
+                          <div style={{fontSize:10,color:"var(--m1)",fontFamily:"var(--fm)"}}>{r.time}</div>
+                        </div>
+                        <Tog on={r.on} color={c.c} toggle={()=>setRems(p=>p.map(x=>x.id===r.id?{...x,on:!x.on}:x))}/>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* TIMETABLE */}
+              {tab==="timetable"&&(
+                <div>
+                  <SH title="Weekly Timetable" sub="Your subject schedule. Tap Edit on any day."/>
+                  {DAYS.map((day,i)=>{
+                    const isT=day===todayDay();
+                    return(
+                      <div key={day} className={`card fu${Math.min(i+1,5)}`} style={{borderColor:isT?"var(--gold)40":"var(--b1)"}}>
+                        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:(tt[day].length>0||ttd===day)?9:0}}>
+                          <div style={{display:"flex",alignItems:"center",gap:9}}>
+                            <span style={{fontFamily:"var(--fm)",fontSize:13,color:isT?"var(--gold)":"var(--m2)",fontWeight:500,minWidth:28}}>{day}</span>
+                            {isT&&<span className="pill" style={{color:"var(--gold)",borderColor:"var(--gold)40",background:"var(--gold)10",fontSize:10}}>Today</span>}
+                            {tt[day].length===0&&!isT&&<span style={{fontSize:12,color:"var(--m1)"}}>Rest day 🌴</span>}
+                          </div>
+                          <button className="btn btn-ghost" style={{padding:"4px 11px",fontSize:11}} onClick={()=>setTtd(ttd===day?null:day)}>{ttd===day?"Done":"Edit"}</button>
+                        </div>
+                        {tt[day].length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:ttd===day?9:0}}>{tt[day].map(s=><span key={s} className="pill" style={{color:SC[s],borderColor:SC[s]+"40",background:SC[s]+"10",fontSize:11}}>{s}</span>)}</div>}
+                        {ttd===day&&(
+                          <div style={{display:"flex",gap:6,flexWrap:"wrap",paddingTop:9,borderTop:"1px solid var(--b1)"}}>
+                            {SUBJECTS.map(s=>{const on=tt[day].includes(s);return(<button key={s} onClick={()=>setTt(p=>({...p,[day]:on?p[day].filter(x=>x!==s):[...p[day],s]}))} style={{padding:"5px 12px",borderRadius:7,border:`1px solid ${on?SC[s]+"55":"var(--b2)"}`,background:on?SC[s]+"15":"var(--s3)",color:on?SC[s]:"var(--m2)",cursor:"pointer",fontSize:12,fontFamily:"var(--fb)",transition:"all .15s"}}>{on?"✓ ":""}{s}</button>);})}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* GOALS */}
+              {tab==="goals"&&(
+                <div>
+                  <SH title="Study Goals" sub="Set daily targets and track your streak."/>
+                  <div className="card fu" style={{background:"linear-gradient(135deg,#16100300,#2a1c04)",borderColor:"var(--gold)30",marginBottom:12,display:"flex",alignItems:"center",gap:14}}>
+                    <div style={{fontSize:36,lineHeight:1}}>🔥</div>
+                    <div><div style={{fontFamily:"var(--fm)",fontSize:32,color:"var(--gold)",fontWeight:500,lineHeight:1}}>{streak.n}</div><div style={{fontSize:12,color:"var(--gold3)",marginTop:2}}>day streak</div></div>
+                    <div style={{marginLeft:"auto",textAlign:"right"}}><div style={{fontFamily:"var(--fm)",fontSize:20,color:"var(--green)"}}>{gDone}/{goals.length}</div><div style={{fontSize:11,color:"var(--m1)"}}>done today</div></div>
+                  </div>
+                  <div className="prog" style={{height:5,marginBottom:16}}><div className="prog-f" style={{width:`${(gDone/goals.length)*100}%`,background:"linear-gradient(90deg,var(--blue),var(--green))"}}/></div>
+                  {goals.map((g,i)=>(
+                    <div key={g.id} className={`card fu${Math.min(i+1,5)}`} style={{borderColor:g.done?"var(--green)28":"var(--b1)",opacity:g.done?.65:1}}>
+                      <div style={{display:"flex",alignItems:"center",gap:9}}>
+                        <button className="check" onClick={()=>{setGoals(p=>p.map(x=>x.id===g.id?{...x,done:!x.done}:x));if(!g.done&&soundOn)playSound("study");}} style={{background:g.done?"var(--green)":"transparent",border:`2px solid ${g.done?"var(--green)":"var(--b2)"}`,color:"#051a10"}}>{g.done?"✓":""}</button>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:13,fontWeight:500,color:g.done?"var(--m1)":"var(--tx)",textDecoration:g.done?"line-through":"none",display:"flex",alignItems:"center",gap:6}}><span style={{width:7,height:7,borderRadius:"50%",background:SC[g.s],flexShrink:0,display:"inline-block"}}/>{g.s}</div>
+                          {g.topic&&<div style={{fontSize:11,color:"var(--m1)",marginTop:2}}>📌 {g.topic}</div>}
+                          {g.target&&<div style={{fontSize:11,color:"var(--blue)",marginTop:1}}>🎯 {g.target}</div>}
+                        </div>
+                        <button className="btn btn-ghost" style={{padding:"4px 11px",fontSize:11,flexShrink:0}} onClick={()=>setEg(eg===g.id?null:g.id)}>{eg===g.id?"Done":"Edit"}</button>
+                      </div>
+                      {eg===g.id&&<div style={{marginTop:10,paddingTop:10,borderTop:"1px solid var(--b1)",display:"flex",flexDirection:"column",gap:7}}><input value={g.topic} onChange={e=>setGoals(p=>p.map(x=>x.id===g.id?{...x,topic:e.target.value}:x))} placeholder="Today's topic…"/><input value={g.target} onChange={e=>setGoals(p=>p.map(x=>x.id===g.id?{...x,target:e.target.value}:x))} placeholder="Target (e.g. 2 chapters, 10 questions)…"/></div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* MEALS */}
+              {tab==="meals"&&(
+                <div>
+                  <SH title="Calorie Log" sub="Target: ~3,200 kcal/day."/>
+                  <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+                    {[["🔥",totKcal,"kcal today",totKcal>=3000?"var(--green)":"var(--gold)"],["🎯","3,200","target","var(--m2)"],["📈",`${Math.min(Math.round((totKcal/3200)*100),100)}%`,"of goal","var(--blue)"]].map(([ic,v,l,c])=>(
+                      <div key={l} className="card fu" style={{flex:1,minWidth:90,padding:"12px 14px",marginBottom:0}}><div style={{fontSize:15,marginBottom:4}}>{ic}</div><div style={{fontFamily:"var(--fm)",fontSize:18,color:c,fontWeight:500}}>{v}</div><div style={{fontSize:11,color:"var(--m1)",marginTop:1}}>{l}</div></div>
+                    ))}
+                  </div>
+                  <div className="prog" style={{height:6,marginBottom:16}}><div className="prog-f" style={{width:`${Math.min((totKcal/3200)*100,100)}%`,background:"linear-gradient(90deg,var(--gold),var(--green))"}}/></div>
+                  <div className="card fu" style={{borderColor:"var(--green)25"}}>
+                    <div style={{fontSize:13,fontWeight:600,color:"var(--green)",marginBottom:10}}>+ Log a Meal</div>
+                    <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                      <select value={mi.name} onChange={e=>setMi(p=>({...p,name:e.target.value}))}><option value="">Select food item…</option>{MEAL_OPT.map(o=><option key={o}>{o}</option>)}</select>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7}}><input value={mi.kcal} onChange={e=>setMi(p=>({...p,kcal:e.target.value}))} placeholder="Calories" type="number"/><input value={mi.time} onChange={e=>setMi(p=>({...p,time:e.target.value}))} placeholder="Time"/></div>
+                      <button className="btn btn-green" onClick={()=>{if(!mi.name)return;setMeals(p=>[...p,{...mi,id:Date.now()}]);setMi({name:"",kcal:"",time:""});if(soundOn)playSound("food");}}>Add Entry</button>
+                    </div>
+                  </div>
+                  {meals.length===0?<div style={{textAlign:"center",color:"var(--m1)",fontSize:13,padding:"24px 0"}}>No meals logged yet.</div>:meals.map((m,i)=>(
+                    <div key={m.id} className={`card fu${Math.min(i+1,5)}`} style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div><div style={{fontSize:13,fontWeight:500}}>{m.name}</div>{m.time&&<div style={{fontSize:11,color:"var(--m1)",fontFamily:"var(--fm)",marginTop:1}}>{m.time}</div>}</div>
+                      <div style={{display:"flex",alignItems:"center",gap:9}}><span style={{fontFamily:"var(--fm)",fontSize:13,color:"var(--gold)"}}>{m.kcal} kcal</span><button onClick={()=>setMeals(p=>p.filter(x=>x.id!==m.id))} style={{background:"var(--s3)",border:"1px solid var(--b2)",color:"var(--m1)",width:24,height:24,borderRadius:5,cursor:"pointer",fontSize:13}}>×</button></div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* WATER */}
+              {tab==="water"&&(
+                <div>
+                  <SH title="Water Tracker" sub="9 glasses (≈2.25 L) daily. Auto-alert every 12 min."/>
+                  <div className="card fu" style={{textAlign:"center",padding:"24px 16px",marginBottom:14,background:"linear-gradient(135deg,#061414,#0b2020)",borderColor:"var(--teal)30"}}>
+                    <div style={{fontSize:44,marginBottom:5}}>{water>=9?"🌊":"💧"}</div>
+                    <div style={{fontFamily:"var(--fm)",fontSize:52,fontWeight:500,color:"var(--teal)",lineHeight:1}}>{water}</div>
+                    <div style={{fontSize:13,color:"var(--m2)",margin:"5px 0 2px"}}>of 9 glasses today</div>
+                    <div style={{fontSize:12,color:water>=9?"var(--green)":"var(--gold)",marginBottom:12}}>{water>=9?"✅ Goal reached!":`${9-water} to go`}</div>
+                    <div className="prog" style={{height:7,marginBottom:14}}><div className="prog-f" style={{width:`${Math.min((water/9)*100,100)}%`,background:"linear-gradient(90deg,var(--teal),#0ea5e9)"}}/></div>
+                    <div style={{display:"flex",justifyContent:"center",gap:12}}>
+                      <button onClick={()=>setWater(w=>Math.max(0,w-1))} style={{width:44,height:44,borderRadius:"50%",fontSize:22,background:"var(--s3)",border:"1px solid var(--b2)",cursor:"pointer",color:"var(--tx)"}}>−</button>
+                      <button onClick={()=>{setWater(w=>Math.min(15,w+1));if(soundOn)playSound("water");}} style={{width:44,height:44,borderRadius:"50%",fontSize:22,background:"var(--teal)",border:"none",cursor:"pointer",color:"#041414",fontWeight:700}}>+</button>
+                    </div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:7}}>
+                    {Array.from({length:9}).map((_,i)=>(
+                      <button key={i} onClick={()=>{setWater(i<water?i:i+1);if(i>=water&&soundOn)playSound("water");}} style={{background:i<water?"#051a1a":"var(--s1)",border:`1px solid ${i<water?"var(--teal)":"var(--b1)"}`,borderRadius:9,padding:"11px 7px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,transition:"all .15s"}}>
+                        <span style={{fontSize:19}}>{i<water?"🥛":"🫙"}</span>
+                        <span style={{fontSize:10,color:i<water?"var(--teal)":"var(--m1)",fontFamily:"var(--fm)"}}>#{i+1}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* WORKOUT */}
+              {tab==="workout"&&(
+                <div>
+                  <SH title="Workout Tracker" sub={`${todayDay()} — mark each set as complete.`}/>
+                  <div className="card fu" style={{background:"linear-gradient(135deg,#0a0f2a,#141c50)",borderColor:"var(--blue)30",marginBottom:14}}>
+                    <div style={{fontSize:10,color:"rgba(255,255,255,.3)",letterSpacing:"2px",textTransform:"uppercase",marginBottom:3,fontFamily:"var(--fm)"}}>{todayDay()}'s Focus</div>
+                    <div style={{fontFamily:"var(--fd)",fontSize:20,color:"var(--tx)"}}>{todW?.f}</div>
+                    <div style={{fontSize:11,color:"rgba(255,255,255,.3)",marginTop:4,fontFamily:"var(--fm)"}}>9:00 AM · 40–45 minutes</div>
+                  </div>
+                  {todW?.e.map((ex,i)=>{
+                    const done=todWD[i]||[];const total=ex.s>0?ex.s:1;const pct=Math.round((done.length/total)*100);
+                    return(
+                      <div key={i} className={`card fu${Math.min(i+1,5)}`}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:ex.s>0?9:0}}>
+                          <div><div style={{fontSize:13,fontWeight:500,color:"var(--tx)"}}>{ex.n}</div><div style={{fontSize:11,color:"var(--m1)",fontFamily:"var(--fm)",marginTop:1}}>{ex.s>0?`${ex.s} × ${ex.r}`:ex.r}</div></div>
+                          {ex.s>0&&<span style={{fontSize:11,color:pct===100?"var(--green)":"var(--m1)",fontFamily:"var(--fm)",background:"var(--s3)",padding:"3px 8px",borderRadius:5}}>{done.length}/{total}</span>}
+                        </div>
+                        {ex.s>0&&(<><div className="prog" style={{height:3,marginBottom:8}}><div className="prog-f" style={{width:`${pct}%`,background:pct===100?"var(--green)":"var(--blue)"}}/></div>
+                          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                            {Array.from({length:ex.s}).map((_,si)=>(
+                              <button key={si} className={`set-chip${done.includes(si)?" on":""}`} onClick={()=>{const c=[...(todWD[i]||[])];if(c.includes(si))c.splice(c.indexOf(si),1);else{c.push(si);if(soundOn)playSound("workout");}setWo(p=>({...p,[todayDay()]:{...p[todayDay()]||{},[i]:c}}));}}>Set {si+1}{done.includes(si)?" ✓":""}</button>
+                            ))}
+                          </div></>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* SLEEP */}
+              {tab==="sleep"&&(
+                <div>
+                  <SH title="Sleep Log" sub="Target: 7 hrs minimum."/>
+                  <div className="card fu" style={{background:"linear-gradient(135deg,#0a0814,#130e24)",borderColor:"var(--purple)30",marginBottom:14}}>
+                    <div style={{fontSize:13,fontWeight:600,color:"var(--purple)",marginBottom:12}}>🌙 Log tonight's sleep</div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7,marginBottom:7}}>
+                      <div><label style={{fontSize:11,color:"var(--m1)",display:"block",marginBottom:4,fontFamily:"var(--fm)"}}>Bedtime</label><input type="time" value={sleep.bed} onChange={e=>setSleep(p=>({...p,bed:e.target.value}))}/></div>
+                      <div><label style={{fontSize:11,color:"var(--m1)",display:"block",marginBottom:4,fontFamily:"var(--fm)"}}>Wake up</label><input type="time" value={sleep.wake} onChange={e=>setSleep(p=>({...p,wake:e.target.value}))}/></div>
+                    </div>
+                    <div style={{marginBottom:9}}>
+                      <label style={{fontSize:11,color:"var(--m1)",display:"block",marginBottom:5,fontFamily:"var(--fm)"}}>Quality — <span style={{color:"var(--tx)"}}>{["Very Poor","Poor","Okay","Good","Excellent"][sleep.q-1]}</span></label>
+                      <div style={{display:"flex",gap:9,marginBottom:1}}>{["😫","😴","😐","🙂","😊"].map((em,i)=><button key={i} className="q-em" onClick={()=>setSleep(p=>({...p,q:i+1}))} style={{opacity:sleep.q===i+1?1:.3}}>{em}</button>)}</div>
+                    </div>
+                    <input value={sleep.note} onChange={e=>setSleep(p=>({...p,note:e.target.value}))} placeholder="Notes…" style={{marginBottom:10}}/>
+                    <button className="btn btn-gold" onClick={()=>{
+                      if(!sleep.bed||!sleep.wake)return;
+                      const[bh,bm]=sleep.bed.split(":").map(Number),[wh,wm]=sleep.wake.split(":").map(Number);
+                      const dur=((wh*60+wm)-(bh*60+bm)+1440)%1440;
+                      const entry={...sleep,date:todayKey(),dur:`${Math.floor(dur/60)}h ${dur%60}m`,id:Date.now()};
+                      setSlog(p=>[entry,...p.slice(0,13)]);setSleep({bed:"",wake:"",q:3,note:""});
+                      if(soundOn)playSound("sleep");fire("Sleep Logged",`${entry.dur} recorded.`,"sleep");
+                    }}>Save Entry</button>
+                  </div>
+                  {slog.length===0?<div style={{textAlign:"center",color:"var(--m1)",fontSize:13,padding:"22px 0"}}>No sleep entries yet.</div>:slog.map((s,i)=>(
+                    <div key={s.id} className={`card fu${Math.min(i+1,5)}`} style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div><div style={{fontSize:13,fontWeight:500}}>{s.date}</div><div style={{fontSize:11,color:"var(--m1)",fontFamily:"var(--fm)",marginTop:1}}>{s.bed} → {s.wake}</div>{s.note&&<div style={{fontSize:11,color:"var(--m1)",marginTop:1}}>{s.note}</div>}</div>
+                      <div style={{textAlign:"right",display:"flex",flexDirection:"column",alignItems:"flex-end",gap:3}}><span style={{fontFamily:"var(--fm)",fontSize:16,color:"var(--purple)"}}>{s.dur}</span><span style={{fontSize:17}}>{["😫","😴","😐","🙂","😊"][s.q-1]}</span></div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* NOTES */}
+              {tab==="notes"&&(
+                <div>
+                  <SH title="Quick Notes" sub="Auto-saved. Jot down doubts, ideas, to-dos."/>
+                  <div style={{position:"relative"}}>
+                    <textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder={"Notes, ideas, reminders…\n\n— Ask sir about recursion\n— Revise DBMS joins\n— Buy sattu"} style={{width:"100%",minHeight:360,resize:"vertical",lineHeight:1.85,padding:"14px",borderRadius:"12px",fontSize:13,fontFamily:"var(--fb)"}}/>
+                    <div style={{position:"absolute",bottom:12,right:12,fontSize:10,color:"var(--m1)",fontFamily:"var(--fm)",pointerEvents:"none",background:"var(--s3)",padding:"2px 7px",borderRadius:4}}>{notes.length} chars</div>
+                  </div>
+                </div>
+              )}
+
+            </div>
+          </main>
+        </div>
+
+        {/* Mobile Bottom Nav */}
+        <nav className="bnav-bar"><NavItems mode="bottom"/></nav>
+      </div>
+    </>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App/>);
+</script>
+</body>
+</html>
