@@ -1,6 +1,6 @@
 {
-  "name": "Harsh — Daily Command Center",
-  "short_name": "CommandCenter",
+ "name": "DailyOps",
+"short_name": "DailyOps",
   "description": "Daily schedule, reminders, goals, meals, water, workout & sleep tracker",
   "start_url": "/",
   "display": "standalone",
