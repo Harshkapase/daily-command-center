@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-function calcScore({ water, goals, meals, slog, streak, warSessions }) {
+export function calcScore({ water, goals, meals, slog, streak, warSessions }) {
   const gDone   = goals.filter(g=>g.done).length;
   const totKcal = meals.reduce((s,m)=>s+(Number(m.kcal)||0),0);
   const lastSleep = slog[0];
@@ -24,7 +24,7 @@ function calcScore({ water, goals, meals, slog, streak, warSessions }) {
   return { total, sleepPts, waterPts, goalPts, calPts, streakPts, warPts, sleepHrs, gDone, totKcal };
 }
 
-function getGrade(score) {
+export function getGrade(score) {
   if (score >= 900) return { label:'Elite',        emoji:'🏆', color:'#f5ad25', bg:'#201500' };
   if (score >= 750) return { label:'Grinder',      emoji:'⚡', color:'#4f46e5', bg:'#0d0b2a' };
   if (score >= 550) return { label:'Building',     emoji:'📈', color:'#18c77c', bg:'#0a2218' };
