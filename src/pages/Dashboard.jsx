@@ -3,29 +3,12 @@ import Logo from '../components/Logo.jsx';
 import WarMode from './WarMode.jsx';
 import NightReview from './NightReview.jsx';
 import StrideScore from './StrideScore.jsx';
-
-/* ── Single universal notification sound ──────────────────────────────────── */
-function playSound() {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    if (ctx.state === 'suspended') ctx.resume();
-    const t = ctx.currentTime;
-    // Clean two-tone chime
-    [[523, 0], [659, 0.13], [784, 0.26]].forEach(([freq, delay]) => {
-      const o = ctx.createOscillator(), g = ctx.createGain();
-      o.connect(g); g.connect(ctx.destination);
-      o.type = 'sine';
-      o.frequency.setValueAtTime(freq, t + delay);
-      g.gain.setValueAtTime(0.22, t + delay);
-      g.gain.exponentialRampToValueAtTime(0.001, t + delay + 0.45);
-      o.start(t + delay); o.stop(t + delay + 0.5);
-    });
-  } catch(e) {}
-}
+import { playSound } from '../utils/sound.js';
+import { SUBJECTS, SLEEP_QUALITY, WAR_RATINGS } from '../utils/constants.js';
+import { DAYS, t2m, nowM, fmtD, fmtDuration, todayKey, todayDay, sleepDuration } from '../utils/time.js';
+import { countDone, sumCalories } from '../utils/stats.js';
 
 /* ── Constants ─────────────────────────────────────────────────────────────── */
-const SUBJECTS = ["DSA","DBMS","OOPS","OS","JavaScript"];
-const DAYS     = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const CAT = {
   shake:   { c:"#4f46e5", bg:"#ededfc", i:"🍌", label:"Shake"   },
   water:   { c:"#00a8a8", bg:"#e6f9f9", i:"💧", label:"Water"   },
@@ -61,11 +44,6 @@ const WP = {
   Sun:{f:"Rest Day 🌴",          e:[{n:"Complete Rest",s:0,r:"—"},{n:"Light Walk (optional)",s:1,r:"20 min"}]},
 };
 
-const t2m = t => { const [h,m] = t.split(":").map(Number); return h*60+m; };
-const nowM = () => { const n = new Date(); return n.getHours()*60+n.getMinutes(); };
-const fmtD = d => { if(d<=0) return "Now"; const h=Math.floor(d/60),m=d%60; return h>0?`${h}h ${m}m`:`${m}m`; };
-const todayKey = () => new Date().toDateString();
-const todayDay = () => DAYS[new Date().getDay()===0?6:new Date().getDay()-1];
 const sv = async (k,v) => { try { await window.storage.set(k, typeof v==="string"?v:JSON.stringify(v)); } catch(e) {} };
 
 function SH({ title, sub }) {
@@ -246,10 +224,10 @@ export default function Dashboard({ theme, toggleTheme }) {
   const srem    = [...rems].sort((a,b) => { let da=t2m(a.time)-cm, db=t2m(b.time)-cm; if(da<0)da+=1440; if(db<0)db+=1440; return da-db; });
   const nxt     = srem.find(r=>r.on);
   const nxtD    = nxt ? (() => { let d=t2m(nxt.time)-cm; if(d<0)d+=1440; return d; })() : null;
-  const totKcal = meals.reduce((s,m) => s+(Number(m.kcal)||0), 0);
+  const totKcal = sumCalories(meals);
   const todW    = WP[todayDay()];
   const todWD   = wo[todayDay()] || {};
-  const gDone   = goals.filter(g=>g.done).length;
+  const gDone   = countDone(goals);
   const isDark  = theme === 'dark';
 
   const NavItems = ({ mode }) => TABS.map(t => {
@@ -587,19 +565,18 @@ export default function Dashboard({ theme, toggleTheme }) {
                     <div><label style={{fontSize:11,color:"var(--text3)",display:"block",marginBottom:4,fontFamily:"var(--fm)",fontWeight:600}}>Wake up</label><input type="time" value={sleep.wake} onChange={e=>setSleep(p=>({...p,wake:e.target.value}))}/></div>
                   </div>
                   <div style={{marginBottom:10}}>
-                    <label style={{fontSize:11,color:"var(--text3)",display:"block",marginBottom:6,fontFamily:"var(--fm)",fontWeight:600}}>Quality — <span style={{color:"var(--text)"}}>{["Very Poor","Poor","Okay","Good","Excellent"][sleep.q-1]}</span></label>
+                    <label style={{fontSize:11,color:"var(--text3)",display:"block",marginBottom:6,fontFamily:"var(--fm)",fontWeight:600}}>Quality — <span style={{color:"var(--text)"}}>{SLEEP_QUALITY[sleep.q-1].label}</span></label>
                     <div style={{display:"flex",gap:11,marginBottom:2}}>
-                      {["😫","😴","😐","🙂","😊"].map((em,i)=>(
-                        <button key={i} onClick={()=>setSleep(p=>({...p,q:i+1}))} style={{fontSize:26,cursor:"pointer",transition:"transform .15s, opacity .15s",background:"none",border:"none",opacity:sleep.q===i+1?1:.25,transform:sleep.q===i+1?"scale(1.2)":"scale(1)"}}>{em}</button>
+                      {SLEEP_QUALITY.map(({emoji},i)=>(
+                        <button key={i} onClick={()=>setSleep(p=>({...p,q:i+1}))} style={{fontSize:26,cursor:"pointer",transition:"transform .15s, opacity .15s",background:"none",border:"none",opacity:sleep.q===i+1?1:.25,transform:sleep.q===i+1?"scale(1.2)":"scale(1)"}}>{emoji}</button>
                       ))}
                     </div>
                   </div>
                   <input value={sleep.note} onChange={e=>setSleep(p=>({...p,note:e.target.value}))} placeholder="Notes…" style={{marginBottom:11}}/>
                   <button className="btn btn-accent" style={{width:"100%"}} onClick={()=>{
                     if(!sleep.bed||!sleep.wake) return;
-                    const [bh,bm]=sleep.bed.split(":").map(Number),[wh,wm]=sleep.wake.split(":").map(Number);
-                    const dur=((wh*60+wm)-(bh*60+bm)+1440)%1440;
-                    const entry={...sleep,date:todayKey(),dur:`${Math.floor(dur/60)}h ${dur%60}m`,id:Date.now()};
+                    const dur=sleepDuration(sleep.bed,sleep.wake);
+                    const entry={...sleep,date:todayKey(),dur:fmtDuration(dur),id:Date.now()};
                     setSlog(p=>[entry,...p.slice(0,13)]); setSleep({bed:"",wake:"",q:3,note:""});
                     if(soundOn) playSound(); fire("Sleep Logged",`${entry.dur} recorded.`,"sleep");
                   }}>Save Entry</button>
@@ -610,7 +587,7 @@ export default function Dashboard({ theme, toggleTheme }) {
                       <div><div style={{fontSize:13,fontWeight:600}}>{s.date}</div><div style={{fontSize:11,color:"var(--text3)",fontFamily:"var(--fm)",marginTop:1}}>{s.bed} → {s.wake}</div>{s.note&&<div style={{fontSize:11,color:"var(--text3)",marginTop:1}}>{s.note}</div>}</div>
                       <div style={{textAlign:"right",display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
                         <span style={{fontFamily:"var(--fm)",fontSize:18,color:"var(--purple)",fontWeight:700}}>{s.dur}</span>
-                        <span style={{fontSize:20}}>{["😫","😴","😐","🙂","😊"][s.q-1]}</span>
+                        <span style={{fontSize:20}}>{SLEEP_QUALITY[s.q-1].emoji}</span>
                       </div>
                     </div>
                   ))
@@ -661,7 +638,7 @@ export default function Dashboard({ theme, toggleTheme }) {
                         </div>
                         <div style={{ textAlign:'right' }}>
                           <div style={{ fontFamily:"var(--fm)", fontSize:15, fontWeight:700, color:'var(--accent)' }}>{s.duration}m</div>
-                          <div style={{ fontSize:16, marginTop:2 }}>{['😤','😐','🙂','🔥','⚡'][s.rating-1]}</div>
+                          <div style={{ fontSize:16, marginTop:2 }}>{WAR_RATINGS[s.rating-1]?.emoji}</div>
                         </div>
                       </div>
                     ))}

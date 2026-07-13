@@ -1,36 +1,4 @@
-import { useState } from 'react';
-
-function calcScore({ water, goals, meals, slog, streak, warSessions }) {
-  const gDone   = goals.filter(g=>g.done).length;
-  const totKcal = meals.reduce((s,m)=>s+(Number(m.kcal)||0),0);
-  const lastSleep = slog[0];
-  const sleepDur  = lastSleep ? (() => {
-    const [bh,bm]=lastSleep.bed.split(":").map(Number);
-    const [wh,wm]=lastSleep.wake.split(":").map(Number);
-    return ((wh*60+wm)-(bh*60+bm)+1440)%1440;
-  })() : 0;
-
-  const sleepHrs = sleepDur / 60;
-  const todayWar = warSessions.filter(s=>s.date===new Date().toDateString());
-
-  const sleepPts   = Math.round(Math.min(sleepHrs/8, 1) * 200);
-  const waterPts   = Math.round((water/9) * 150);
-  const goalPts    = Math.round((gDone/Math.max(goals.length,1)) * 250);
-  const calPts     = Math.round(Math.min(totKcal/3200, 1) * 200);
-  const streakPts  = Math.round(Math.min(streak.n/30, 1) * 150);
-  const warPts     = Math.min(todayWar.length * 25, 50);
-  const total      = sleepPts + waterPts + goalPts + calPts + streakPts + warPts;
-
-  return { total, sleepPts, waterPts, goalPts, calPts, streakPts, warPts, sleepHrs, gDone, totKcal };
-}
-
-function getGrade(score) {
-  if (score >= 900) return { label:'Elite',        emoji:'🏆', color:'#f5ad25', bg:'#201500' };
-  if (score >= 750) return { label:'Grinder',      emoji:'⚡', color:'#4f46e5', bg:'#0d0b2a' };
-  if (score >= 550) return { label:'Building',     emoji:'📈', color:'#18c77c', bg:'#0a2218' };
-  if (score >= 350) return { label:'Inconsistent', emoji:'😐', color:'#e79d13', bg:'#201500' };
-  return                    { label:'Sleeping On Yourself', emoji:'😴', color:'#e5484d', bg:'#1a0505' };
-}
+import { calcScore, getGrade, GRADE_TIERS } from '../utils/score.js';
 
 export default function StrideScore({ water, goals, meals, slog, streak, warSessions, theme }) {
   const s = calcScore({ water, goals, meals, slog, streak, warSessions });
@@ -111,13 +79,7 @@ export default function StrideScore({ water, goals, meals, slog, streak, warSess
       <div className="card fu2">
         <div style={{ fontSize:12, color:'var(--text3)', fontFamily:"'JetBrains Mono',monospace", fontWeight:600, letterSpacing:'.5px', textTransform:'uppercase', marginBottom:12 }}>Grade Scale</div>
         <div style={{ display:'flex', flexDirection:'column', gap:7 }}>
-          {[
-            [900,1000,'🏆','Elite',        '#f5ad25'],
-            [750, 899,'⚡','Grinder',      '#4f46e5'],
-            [550, 749,'📈','Building',     '#18c77c'],
-            [350, 549,'😐','Inconsistent', '#e79d13'],
-            [0,   349,'😴','Sleeping On Yourself','#e5484d'],
-          ].map(([lo,hi,em,label,c])=>{
+          {GRADE_TIERS.map(({min:lo,max:hi,emoji:em,label,color:c})=>{
             const active = s.total >= lo && s.total <= hi;
             return (
               <div key={label} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 12px', borderRadius:9, background:active?c+'12':'transparent', border:`1.5px solid ${active?c+'40':'transparent'}`, transition:'all .3s' }}>
