@@ -61,11 +61,11 @@ const WP = {
   Sun:{f:"Rest Day 🌴",          e:[{n:"Complete Rest",s:0,r:"—"},{n:"Light Walk (optional)",s:1,r:"20 min"}]},
 };
 
-const t2m = t => { const [h,m] = t.split(":").map(Number); return h*60+m; };
-const nowM = () => { const n = new Date(); return n.getHours()*60+n.getMinutes(); };
-const fmtD = d => { if(d<=0) return "Now"; const h=Math.floor(d/60),m=d%60; return h>0?`${h}h ${m}m`:`${m}m`; };
-const todayKey = () => new Date().toDateString();
-const todayDay = () => DAYS[new Date().getDay()===0?6:new Date().getDay()-1];
+export const t2m = t => { const [h,m] = t.split(":").map(Number); return h*60+m; };
+export const nowM = () => { const n = new Date(); return n.getHours()*60+n.getMinutes(); };
+export const fmtD = d => { if(d<=0) return "Now"; const h=Math.floor(d/60),m=d%60; return h>0?`${h}h ${m}m`:`${m}m`; };
+export const todayKey = () => new Date().toDateString();
+export const todayDay = () => DAYS[new Date().getDay()===0?6:new Date().getDay()-1];
 const sv = async (k,v) => { try { await window.storage.set(k, typeof v==="string"?v:JSON.stringify(v)); } catch(e) {} };
 
 function SH({ title, sub }) {

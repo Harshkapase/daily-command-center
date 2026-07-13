@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 
-const PERSONAS = {
+export const PERSONAS = {
   monk:    { label:"The Monk",    emoji:"🧘", color:"#00a8a8", bg:"#041818", quote:"Silence is the loudest discipline.", accent:"#0ecece" },
   warrior: { label:"The Warrior", emoji:"⚔️", color:"#e5484d", bg:"#1a0505", quote:"Pain is temporary. Regret is forever.", accent:"#ff6b6b" },
   scholar: { label:"The Scholar", emoji:"📚", color:"#4f46e5", bg:"#08081a", quote:"Every page is a weapon.", accent:"#818cf8" },
