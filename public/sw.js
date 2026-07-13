@@ -25,10 +25,21 @@ self.addEventListener('fetch', e => {
     fetch(e.request)
       .then(res => {
         const clone = res.clone();
-        caches.open(CACHE).then(c => c.put(e.request, clone));
-        return res;
+        return caches.open(CACHE)
+          .then(c => c.put(e.request, clone))
+          .catch(error => console.warn('Failed to update cached response:', error))
+          .then(() => res);
       })
-      .catch(() => caches.match(e.request).then(r => r || caches.match('/index.html')))
+      .catch(async networkError => {
+        try {
+          const cached = await caches.match(e.request) || await caches.match('/index.html');
+          if (cached) return cached;
+        } catch (cacheError) {
+          throw new AggregateError([networkError, cacheError], 'Network and cache lookup both failed');
+        }
+        console.error('Request failed with no cached fallback:', networkError);
+        return new Response('Offline', { status: 503, statusText: 'Service Unavailable' });
+      })
   );
 });
 
@@ -42,26 +53,26 @@ self.addEventListener('message', e => {
     const { id, delay, title, body, tag } = e.data;
     if (timers[id]) clearTimeout(timers[id]);
     timers[id] = setTimeout(() => {
-      self.registration.showNotification(title, {
+      void self.registration.showNotification(title, {
         body,
         tag,
         icon: '/icon-192.png',
         badge: '/icon-192.png',
         vibrate: [200, 100, 200],
         requireInteraction: false,
-      });
+      }).catch(error => console.error('Failed to show scheduled notification:', error));
     }, delay);
   }
 
   if (e.data.type === 'WATER_INTERVAL') {
     if (timers['water-interval']) clearInterval(timers['water-interval']);
     timers['water-interval'] = setInterval(() => {
-      self.registration.showNotification('Drink Water 💧', {
+      void self.registration.showNotification('Drink Water 💧', {
         body: 'Time for a glass of water! Stay hydrated.',
         tag: 'water-reminder',
         icon: '/icon-192.png',
         vibrate: [100, 50, 100],
-      });
+      }).catch(error => console.error('Failed to show water reminder:', error));
     }, 12 * 60 * 1000); // every 12 minutes
   }
 });
@@ -70,11 +81,11 @@ self.addEventListener('message', e => {
 self.addEventListener('notificationclick', e => {
   e.notification.close();
   e.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
       for (const c of list) {
         if (c.url.includes(self.location.origin) && 'focus' in c) return c.focus();
       }
-      if (clients.openWindow) return clients.openWindow('/');
+      if (self.clients.openWindow) return self.clients.openWindow('/');
     })
   );
 });

@@ -9,7 +9,9 @@ const PERSONAS = {
 function playWarSound(type) {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    if (ctx.state === 'suspended') ctx.resume();
+    if (ctx.state === 'suspended') {
+      void ctx.resume().catch(error => console.warn('Unable to resume focus timer audio:', error));
+    }
     const t = ctx.currentTime;
     if (type === 'start') {
       [[220,0],[330,0.1],[440,0.2],[660,0.35]].forEach(([f,d]) => {
@@ -34,7 +36,9 @@ function playWarSound(type) {
       g.gain.setValueAtTime(0.06,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.05);
       o.start(t); o.stop(t+0.06);
     }
-  } catch(e) {}
+  } catch (error) {
+    console.warn('Unable to play focus timer audio:', error);
+  }
 }
 
 export default function WarMode({ onClose, persona, sessions, setSessions, soundOn }) {
