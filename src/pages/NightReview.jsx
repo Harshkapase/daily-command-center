@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { countDone, sumCalories } from '../utils/stats.js';
 
 export default function NightReview({ onClose, onSave, goals, water, meals, slog, streak }) {
   const [step, setStep]     = useState(0);
@@ -8,8 +9,8 @@ export default function NightReview({ onClose, onSave, goals, water, meals, slog
   const [sleepGoal, setSleepGoal] = useState('');
   const [tomorrowIntent, setTomorrowIntent] = useState('');
 
-  const gDone = goals.filter(g=>g.done).length;
-  const totKcal = meals.reduce((s,m)=>s+(Number(m.kcal)||0), 0);
+  const gDone = countDone(goals);
+  const totKcal = sumCalories(meals);
   const lastSleep = slog[0];
   const allDone = gDone === goals.length;
 

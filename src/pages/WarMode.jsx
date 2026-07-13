@@ -1,41 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
+import { playWarSound } from '../utils/sound.js';
+import { WAR_SUBJECTS, WAR_RATINGS } from '../utils/constants.js';
 
 const PERSONAS = {
   monk:    { label:"The Monk",    emoji:"🧘", color:"#00a8a8", bg:"#041818", quote:"Silence is the loudest discipline.", accent:"#0ecece" },
   warrior: { label:"The Warrior", emoji:"⚔️", color:"#e5484d", bg:"#1a0505", quote:"Pain is temporary. Regret is forever.", accent:"#ff6b6b" },
   scholar: { label:"The Scholar", emoji:"📚", color:"#4f46e5", bg:"#08081a", quote:"Every page is a weapon.", accent:"#818cf8" },
 };
-
-function playWarSound(type) {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    if (ctx.state === 'suspended') ctx.resume();
-    const t = ctx.currentTime;
-    if (type === 'start') {
-      [[220,0],[330,0.1],[440,0.2],[660,0.35]].forEach(([f,d]) => {
-        const o=ctx.createOscillator(), g=ctx.createGain();
-        o.connect(g); g.connect(ctx.destination);
-        o.type='sawtooth'; o.frequency.setValueAtTime(f,t+d);
-        g.gain.setValueAtTime(0.18,t+d); g.gain.exponentialRampToValueAtTime(0.001,t+d+0.3);
-        o.start(t+d); o.stop(t+d+0.35);
-      });
-    } else if (type === 'end') {
-      [[784,0],[659,0.15],[523,0.3],[440,0.45],[392,0.6]].forEach(([f,d]) => {
-        const o=ctx.createOscillator(), g=ctx.createGain();
-        o.connect(g); g.connect(ctx.destination);
-        o.type='sine'; o.frequency.setValueAtTime(f,t+d);
-        g.gain.setValueAtTime(0.22,t+d); g.gain.exponentialRampToValueAtTime(0.001,t+d+0.4);
-        o.start(t+d); o.stop(t+d+0.45);
-      });
-    } else if (type === 'tick') {
-      const o=ctx.createOscillator(), g=ctx.createGain();
-      o.connect(g); g.connect(ctx.destination);
-      o.type='sine'; o.frequency.value=800;
-      g.gain.setValueAtTime(0.06,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.05);
-      o.start(t); o.stop(t+0.06);
-    }
-  } catch(e) {}
-}
 
 export default function WarMode({ onClose, persona, sessions, setSessions, soundOn }) {
   const p = PERSONAS[persona] || PERSONAS.warrior;
@@ -51,7 +22,6 @@ export default function WarMode({ onClose, persona, sessions, setSessions, sound
   const intervalRef = useRef(null);
   const startTimeRef = useRef(null);
 
-  const SUBJECTS = ["DSA","DBMS","OOPS","OS","JavaScript","Other"];
   const total = duration * 60;
   const pct   = Math.min((elapsed / total) * 100, 100);
   const remaining = total - elapsed;
@@ -114,7 +84,7 @@ export default function WarMode({ onClose, persona, sessions, setSessions, sound
       {countdown === 5 && (
         <div style={{ display:'flex', flexDirection:'column', gap:12, alignItems:'center', marginBottom:32, animation:'fadeUp .4s ease' }}>
           <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'center' }}>
-            {SUBJECTS.map(s => (
+            {WAR_SUBJECTS.map(s => (
               <button key={s} onClick={()=>setSubject(s)} style={{ padding:'6px 14px', borderRadius:8, border:`1.5px solid ${subject===s?p.accent:'rgba(255,255,255,.15)'}`, background:subject===s?p.accent+'22':'transparent', color:subject===s?p.accent:'rgba(255,255,255,.5)', cursor:'pointer', fontSize:12, fontWeight:600, transition:'all .2s' }}>{s}</button>
             ))}
           </div>
@@ -207,9 +177,9 @@ export default function WarMode({ onClose, persona, sessions, setSessions, sound
       <div style={{ marginBottom:28 }}>
         <div style={{ fontSize:13, color:'rgba(255,255,255,.5)', marginBottom:12, textAlign:'center' }}>How was that session?</div>
         <div style={{ display:'flex', gap:12, justifyContent:'center' }}>
-          {[['😤','Rough'],['😐','Okay'],['🙂','Good'],['🔥','Lit'],['⚡','God tier']].map(([em,label],i) => (
+          {WAR_RATINGS.map(({emoji,label},i) => (
             <button key={i} onClick={()=>setRating(i+1)} style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:4, background:rating===i+1?p.accent+'25':'transparent', border:`1.5px solid ${rating===i+1?p.accent:'rgba(255,255,255,.12)'}`, borderRadius:10, padding:'10px 12px', cursor:'pointer', transition:'all .2s' }}>
-              <span style={{ fontSize:22 }}>{em}</span>
+              <span style={{ fontSize:22 }}>{emoji}</span>
               <span style={{ fontSize:10, color:'rgba(255,255,255,.4)', fontWeight:600 }}>{label}</span>
             </button>
           ))}
