@@ -20,49 +20,63 @@ self.addEventListener('activate', e => {
 
 // Fetch: network-first, fallback to cache
 self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET') return;
+  const url = new URL(e.request.url);
+  if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
+
   e.respondWith(
     fetch(e.request)
       .then(res => {
-        const clone = res.clone();
-        caches.open(CACHE).then(c => c.put(e.request, clone));
+        if (res.ok && res.type === 'basic') {
+          const clone = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, clone));
+        }
         return res;
       })
-      .catch(() => caches.match(e.request).then(r => r || caches.match('/index.html')))
+      .catch(async () => {
+        const cached = await caches.match(e.request);
+        if (cached) return cached;
+        if (e.request.mode === 'navigate') return caches.match('/index.html');
+        return Response.error();
+      })
   );
 });
 
 // ── Scheduled notifications ───────────────────────────────────────────────
-const timers = {};
+const timers = new Map();
 
 self.addEventListener('message', e => {
   if (!e.data) return;
 
   if (e.data.type === 'SCHEDULE') {
     const { id, delay, title, body, tag } = e.data;
-    if (timers[id]) clearTimeout(timers[id]);
-    timers[id] = setTimeout(() => {
-      self.registration.showNotification(title, {
-        body,
-        tag,
+    const timerId = String(id);
+    const delayMs = Number(delay);
+    if (!timerId || !Number.isFinite(delayMs) || delayMs < 0 || delayMs > 24 * 60 * 60 * 1000) return;
+
+    if (timers.has(timerId)) clearTimeout(timers.get(timerId));
+    timers.set(timerId, setTimeout(() => {
+      self.registration.showNotification(String(title).slice(0, 100), {
+        body: String(body).slice(0, 300),
+        tag: String(tag).slice(0, 100),
         icon: '/icon-192.png',
         badge: '/icon-192.png',
         vibrate: [200, 100, 200],
         requireInteraction: false,
       });
-    }, delay);
+      timers.delete(timerId);
+    }, delayMs));
   }
 
   if (e.data.type === 'WATER_INTERVAL') {
-    if (timers['water-interval']) clearInterval(timers['water-interval']);
-    timers['water-interval'] = setInterval(() => {
+    if (timers.has('water-interval')) clearInterval(timers.get('water-interval'));
+    timers.set('water-interval', setInterval(() => {
       self.registration.showNotification('Drink Water 💧', {
         body: 'Time for a glass of water! Stay hydrated.',
         tag: 'water-reminder',
         icon: '/icon-192.png',
         vibrate: [100, 50, 100],
       });
-    }, 12 * 60 * 1000); // every 12 minutes
+    }, 12 * 60 * 1000)); // every 12 minutes
   }
 });
 

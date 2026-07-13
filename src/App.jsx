@@ -6,7 +6,7 @@ export default function App() {
 
   useEffect(() => {
     // Load saved theme
-    const saved = localStorage.getItem('stride-theme') || 'light';
+    const saved = localStorage.getItem('stride-theme') === 'dark' ? 'dark' : 'light';
     setTheme(saved);
     document.documentElement.setAttribute('data-theme', saved);
   }, []);
