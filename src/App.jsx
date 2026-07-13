@@ -6,7 +6,13 @@ export default function App() {
 
   useEffect(() => {
     // Load saved theme
-    const saved = localStorage.getItem('stride-theme') || 'light';
+    let saved = 'light';
+    try {
+      const stored = localStorage.getItem('stride-theme');
+      if (stored === 'light' || stored === 'dark') saved = stored;
+    } catch (error) {
+      console.error('Failed to load the saved theme:', error);
+    }
     setTheme(saved);
     document.documentElement.setAttribute('data-theme', saved);
   }, []);
@@ -15,7 +21,11 @@ export default function App() {
     const next = theme === 'light' ? 'dark' : 'light';
     setTheme(next);
     document.documentElement.setAttribute('data-theme', next);
-    localStorage.setItem('stride-theme', next);
+    try {
+      localStorage.setItem('stride-theme', next);
+    } catch (error) {
+      console.error('Failed to save the selected theme:', error);
+    }
   }
 
   return <Dashboard theme={theme} toggleTheme={toggleTheme} />;

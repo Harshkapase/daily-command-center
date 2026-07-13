@@ -8,7 +8,9 @@ import StrideScore from './StrideScore.jsx';
 function playSound() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    if (ctx.state === 'suspended') ctx.resume();
+    if (ctx.state === 'suspended') {
+      void ctx.resume().catch(error => console.warn('Unable to resume notification audio:', error));
+    }
     const t = ctx.currentTime;
     // Clean two-tone chime
     [[523, 0], [659, 0.13], [784, 0.26]].forEach(([freq, delay]) => {
@@ -20,7 +22,9 @@ function playSound() {
       g.gain.exponentialRampToValueAtTime(0.001, t + delay + 0.45);
       o.start(t + delay); o.stop(t + delay + 0.5);
     });
-  } catch(e) {}
+  } catch (error) {
+    console.warn('Unable to play notification audio:', error);
+  }
 }
 
 /* ── Constants ─────────────────────────────────────────────────────────────── */
@@ -66,7 +70,13 @@ const nowM = () => { const n = new Date(); return n.getHours()*60+n.getMinutes()
 const fmtD = d => { if(d<=0) return "Now"; const h=Math.floor(d/60),m=d%60; return h>0?`${h}h ${m}m`:`${m}m`; };
 const todayKey = () => new Date().toDateString();
 const todayDay = () => DAYS[new Date().getDay()===0?6:new Date().getDay()-1];
-const sv = async (k,v) => { try { await window.storage.set(k, typeof v==="string"?v:JSON.stringify(v)); } catch(e) {} };
+const sv = async (k,v) => {
+  try {
+    await window.storage.set(k, typeof v==="string"?v:JSON.stringify(v));
+  } catch (error) {
+    throw new Error(`Unable to save "${k}"`, { cause: error });
+  }
+};
 
 function SH({ title, sub }) {
   return (
@@ -126,6 +136,8 @@ export default function Dashboard({ theme, toggleTheme }) {
   const [nightLogs,setNightLogs]   = useState([]);
   const firedR = useRef(new Set());
   const wRef   = useRef(null);
+  const storageErrorShown = useRef(false);
+  const notificationErrorShown = useRef(false);
   const [,tick] = useState(0);
 
   // Key for tab animation
@@ -136,58 +148,63 @@ export default function Dashboard({ theme, toggleTheme }) {
   // Load persisted data
   useEffect(() => {
     (async () => {
-      const ld = async (k,fn,raw) => { try { const r=await window.storage.get(k); if(r) fn(raw?r.value:JSON.parse(r.value)); } catch(e) {} };
-      ld("hkr", setRems); ld("hktt", setTt); ld(`hkg-${todayKey()}`, setGoals); ld("hkst", setStreak);
-      ld(`hkm-${todayKey()}`, setMeals); ld("hkn", v=>setNotes(v), true);
-      ld(`hkw-${todayKey()}`, v=>setWater(Number(v)), true);
-      ld(`hkwo-${todayKey()}`, setWo); ld("hksl", setSlog);
-      ld("hksnd", v=>setSoundOn(v==="true"), true);
-      ld("hkws", setWarSessions); ld("hknl", setNightLogs);
-      ld("hkpersona", v=>setPersona(v), true);
+      const ld = async (k,fn,raw) => {
+        try {
+          const r=await window.storage.get(k);
+          if(r) fn(raw?r.value:JSON.parse(r.value));
+        } catch (error) {
+          throw new Error(`Unable to load "${k}"`, { cause: error });
+        }
+      };
+      const results = await Promise.allSettled([
+        ld("hkr", setRems), ld("hktt", setTt), ld(`hkg-${todayKey()}`, setGoals), ld("hkst", setStreak),
+        ld(`hkm-${todayKey()}`, setMeals), ld("hkn", v=>setNotes(v), true),
+        ld(`hkw-${todayKey()}`, v=>setWater(Number(v)), true),
+        ld(`hkwo-${todayKey()}`, setWo), ld("hksl", setSlog),
+        ld("hksnd", v=>setSoundOn(v==="true"), true),
+        ld("hkws", setWarSessions), ld("hknl", setNightLogs),
+        ld("hkpersona", v=>setPersona(v), true),
+      ]);
+      const failures = results.filter(result => result.status === 'rejected').map(result => result.reason);
+      if (failures.length) handleStorageError(new AggregateError(failures, 'Some saved data could not be loaded'));
       // Restore notification state & re-register SW on every app open
       const np = typeof Notification !== 'undefined' ? Notification.permission : 'default';
       if (np === 'granted') {
         setNotif(true);
         // Re-register SW and reschedule — fixes "removed from home screen" issue
         if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.ready.then(reg => {
-            if (reg.active) reg.active.postMessage({ type: 'WATER_INTERVAL' });
-          });
+          void sendServiceWorkerMessage({ type: 'WATER_INTERVAL' }).catch(handleNotificationError);
         }
       }
-    })();
+    })().catch(handleStorageError);
   }, []);
 
-  useEffect(() => { sv("hkr", rems); }, [rems]);
-  useEffect(() => { sv("hktt", tt); }, [tt]);
-  useEffect(() => { sv(`hkg-${todayKey()}`, goals); }, [goals]);
-  useEffect(() => { sv(`hkm-${todayKey()}`, meals); }, [meals]);
-  useEffect(() => { sv("hkn", notes); }, [notes]);
-  useEffect(() => { sv(`hkw-${todayKey()}`, String(water)); }, [water]);
-  useEffect(() => { sv(`hkwo-${todayKey()}`, wo); }, [wo]);
-  useEffect(() => { sv("hksl", slog); }, [slog]);
-  useEffect(() => { sv("hksnd", String(soundOn)); }, [soundOn]);
-  useEffect(() => { sv("hkws", warSessions); }, [warSessions]);
-  useEffect(() => { sv("hknl", nightLogs); }, [nightLogs]);
-  useEffect(() => { sv("hkpersona", persona); }, [persona]);
+  useEffect(() => { void sv("hkr", rems).catch(handleStorageError); }, [rems]);
+  useEffect(() => { void sv("hktt", tt).catch(handleStorageError); }, [tt]);
+  useEffect(() => { void sv(`hkg-${todayKey()}`, goals).catch(handleStorageError); }, [goals]);
+  useEffect(() => { void sv(`hkm-${todayKey()}`, meals).catch(handleStorageError); }, [meals]);
+  useEffect(() => { void sv("hkn", notes).catch(handleStorageError); }, [notes]);
+  useEffect(() => { void sv(`hkw-${todayKey()}`, String(water)).catch(handleStorageError); }, [water]);
+  useEffect(() => { void sv(`hkwo-${todayKey()}`, wo).catch(handleStorageError); }, [wo]);
+  useEffect(() => { void sv("hksl", slog).catch(handleStorageError); }, [slog]);
+  useEffect(() => { void sv("hksnd", String(soundOn)).catch(handleStorageError); }, [soundOn]);
+  useEffect(() => { void sv("hkws", warSessions).catch(handleStorageError); }, [warSessions]);
+  useEffect(() => { void sv("hknl", nightLogs).catch(handleStorageError); }, [nightLogs]);
+  useEffect(() => { void sv("hkpersona", persona).catch(handleStorageError); }, [persona]);
 
   // Streak update
   useEffect(() => {
     if (goals.every(g=>g.done) && streak.last !== todayKey()) {
       const y = new Date(); y.setDate(y.getDate()-1);
       const ns = { n: streak.last===y.toDateString() ? streak.n+1 : 1, last: todayKey() };
-      setStreak(ns); sv("hkst", ns);
+      setStreak(ns); void sv("hkst", ns).catch(handleStorageError);
     }
   }, [goals]);
 
   // Re-schedule all reminders via SW (runs whenever notif or rems change)
   useEffect(() => {
     if (!notif) return;
-    const cm = nowM();
-    rems.filter(r=>r.on).forEach(r => {
-      let d = t2m(r.time) - cm; if (d<0) d+=1440;
-      window.scheduleNotif(r.id, d*60*1000, r.label, r.msg);
-    });
+    void scheduleReminders().catch(handleNotificationError);
   }, [notif, rems]);
 
   // In-app reminder check (every 30s tick)
@@ -213,28 +230,59 @@ export default function Dashboard({ theme, toggleTheme }) {
     setToast({ label, msg, cat });
     setTimeout(() => setToast(null), 4500);
     if (soundOn) playSound();
-    if (notif && "Notification" in window && Notification.permission === "granted")
-      new Notification(label, { body: msg, icon: "/icon-192.png", vibrate: [150,80,150] });
+    if (notif && "Notification" in window && Notification.permission === "granted") {
+      try {
+        new Notification(label, { body: msg, icon: "/icon-192.png", vibrate: [150,80,150] });
+      } catch (error) {
+        console.error('Unable to display a notification:', error);
+      }
+    }
+  }
+
+  function handleStorageError(error) {
+    console.error('On-device storage error:', error);
+    if (storageErrorShown.current) return;
+    storageErrorShown.current = true;
+    fire("Storage Error", "Some changes may not be saved on this device.", "sleep");
+  }
+
+  function handleNotificationError(error) {
+    console.error('Notification error:', error);
+    if (notificationErrorShown.current) return;
+    notificationErrorShown.current = true;
+    fire("Notification Error", "Background reminders could not be scheduled.", "sleep");
+  }
+
+  async function sendServiceWorkerMessage(message) {
+    if (!('serviceWorker' in navigator)) throw new Error('Service workers are not supported by this browser');
+    const registration = await navigator.serviceWorker.ready;
+    if (!registration.active) throw new Error('Service worker is not active');
+    registration.active.postMessage(message);
+  }
+
+  async function scheduleReminders() {
+    if (typeof window.scheduleNotif !== 'function') throw new Error('Notification scheduler is unavailable');
+    const cm = nowM();
+    await Promise.all(rems.filter(r=>r.on).map(r => {
+      let d = t2m(r.time) - cm; if (d<0) d+=1440;
+      return window.scheduleNotif(r.id, d*60*1000, r.label, r.msg);
+    }));
   }
 
   async function enableNotif() {
     if (!("Notification" in window)) { fire("Not Supported", "Use Chrome on Android.", "sleep"); return; }
-    const p = await Notification.requestPermission();
-    setNotif(p === "granted");
-    if (p === "granted") {
-      // Re-register SW and set up water interval
-      navigator.serviceWorker.ready.then(reg => {
-        if (reg.active) reg.active.postMessage({ type: 'WATER_INTERVAL' });
-      });
-      // Reschedule all reminders immediately
-      const cm = nowM();
-      rems.filter(r=>r.on).forEach(r => {
-        let d = t2m(r.time) - cm; if (d<0) d+=1440;
-        window.scheduleNotif(r.id, d*60*1000, r.label, r.msg);
-      });
-      fire("Notifications On 🔔", "Reminders will fire even with screen off!", "workout");
-    } else {
-      fire("Denied", "Allow notifications in Chrome Settings → Site Settings.", "sleep");
+    try {
+      const p = await Notification.requestPermission();
+      setNotif(p === "granted");
+      if (p === "granted") {
+        await sendServiceWorkerMessage({ type: 'WATER_INTERVAL' });
+        await scheduleReminders();
+        fire("Notifications On 🔔", "Reminders will fire even with screen off!", "workout");
+      } else {
+        fire("Denied", "Allow notifications in Chrome Settings → Site Settings.", "sleep");
+      }
+    } catch (error) {
+      handleNotificationError(error);
     }
   }
 
